@@ -1,458 +1,341 @@
 (function () {
   'use strict';
 
-  let currentFileId = null;
   let filesList = [];
-  let defaultFolder = '';
-  let selectedResult = null;
 
-  const sidebar = document.getElementById('file-list');
-  const viewer = document.getElementById('viewer');
-  const placeholder = document.getElementById('placeholder');
-  const fileTitle = document.getElementById('file-title');
-  const btnSave = document.getElementById('btn-save');
+  const fileList = document.getElementById('file-list');
   const statusBanner = document.getElementById('status-banner');
-  const authBanner = document.getElementById('auth-banner');
-
-  // Add-file modal
-  const btnAddFile = document.getElementById('btn-add-file');
-  const modal = document.getElementById('add-file-modal');
-  const modalClose = document.getElementById('modal-close');
-  const stepSearch = document.getElementById('step-search');
-  const stepDetails = document.getElementById('step-details');
+  const btnSyncAll = document.getElementById('btn-sync-all');
+  const btnCheckUpdate = document.getElementById('btn-check-update');
   const searchInput = document.getElementById('search-input');
-  const btnSearch = document.getElementById('btn-search');
-  const searchStatus = document.getElementById('search-status');
-  const searchResults = document.getElementById('search-results');
-  const chosenName = document.getElementById('chosen-name');
-  const inputLabel = document.getElementById('input-label');
-  const inputPath = document.getElementById('input-path');
-  const btnPickFolder = document.getElementById('btn-pick-folder');
-  const detailsError = document.getElementById('details-error');
-  const btnBack = document.getElementById('btn-back');
-  const btnCancel = document.getElementById('btn-cancel');
-  const btnConfirm = document.getElementById('btn-confirm');
+
+  const btnSettings = document.getElementById('btn-settings');
+  const settingsModal = document.getElementById('settings-modal');
+  const settingsClose = document.getElementById('settings-close');
+  const settingsCancel = document.getElementById('settings-cancel');
+  const settingsSave = document.getElementById('settings-save');
+  const settingsError = document.getElementById('settings-error');
+  const inputOriginalDir = document.getElementById('input-original-dir');
+  const inputServerDir = document.getElementById('input-server-dir');
+  const btnPickOriginal = document.getElementById('btn-pick-original');
+  const btnPickServer = document.getElementById('btn-pick-server');
+
+  const STATUS_LABELS = {
+    synced: { text: 'Sincronizado', cls: 'badge-ok' },
+    outdated: { text: 'Desatualizado', cls: 'badge-warn' },
+    new: { text: 'Novo', cls: 'badge-new' },
+  };
+
+  // Relative paths (the full "Subpasta/Ficheiro.xlsx" form, so two files with the
+  // same base name in different subfolders are tracked separately) with a copy
+  // currently in flight. Kept independent of any single button element so a
+  // re-render triggered by another action still renders this row as disabled —
+  // otherwise the user could click the fresh button and fire a second concurrent
+  // copy of the same file.
+  const syncingNames = new Set();
+  let syncingAll = false;
+  let savingSettings = false;
+  let checkingUpdate = false;
+  let searchQuery = '';
 
   async function init() {
-    await checkAuth();
-    await loadFiles();
-    loadDefaultFolder();
-
-    btnSave.addEventListener('click', saveFile);
-
-    btnAddFile.addEventListener('click', openModal);
-    modalClose.addEventListener('click', closeModal);
-    btnCancel.addEventListener('click', closeModal);
-    btnBack.addEventListener('click', function () { showStep('search'); });
-    btnSearch.addEventListener('click', runSearch);
-    btnPickFolder.addEventListener('click', pickFolder);
-    btnConfirm.addEventListener('click', confirmAdd);
-
-    searchInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        runSearch();
-      }
+    btnSyncAll.addEventListener('click', syncAll);
+    btnCheckUpdate.addEventListener('click', checkForUpdate);
+    searchInput.addEventListener('input', function () {
+      searchQuery = searchInput.value;
+      renderFileList();
     });
 
-    modal.addEventListener('click', function (e) {
-      if (e.target === modal) closeModal();
-    });
+    btnSettings.addEventListener('click', openSettings);
+    settingsClose.addEventListener('click', closeSettings);
+    settingsCancel.addEventListener('click', closeSettings);
+    settingsSave.addEventListener('click', saveSettings);
+    btnPickOriginal.addEventListener('click', function () { pickFolder(inputOriginalDir); });
+    btnPickServer.addEventListener('click', function () { pickFolder(inputServerDir); });
 
+    // Clicking the dimmed backdrop closes; clicking inside the dialog must not.
+    settingsModal.addEventListener('click', function (e) {
+      if (e.target === settingsModal) closeSettings();
+    });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !modal.hidden) closeModal();
+      if (e.key === 'Escape' && !settingsModal.hidden) closeSettings();
     });
+
+    await loadFiles();
   }
 
-  async function checkAuth() {
-    try {
-      const resp = await fetch('/api/auth/status');
-      const data = await resp.json();
-      if (!data.authenticated) {
-        authBanner.classList.add('show');
-      } else {
-        authBanner.classList.remove('show');
-      }
-    } catch (e) {
-      console.error('Auth check failed:', e);
-    }
-  }
+  /* ---------------- files ---------------- */
 
-  async function loadDefaultFolder() {
-    try {
-      const resp = await fetch('/api/default-folder');
-      const data = await resp.json();
-      defaultFolder = data.path || '';
-    } catch (e) {
-      console.error('Failed to load default folder:', e);
-    }
-  }
-
-  async function loadFiles(preferredId) {
+  async function loadFiles() {
     try {
       const resp = await fetch('/api/files');
-      filesList = await resp.json();
-      renderSidebar();
-
-      if (filesList.length > 0) {
-        const target = findFile(preferredId) || findFile(currentFileId) || filesList[0];
-        selectFile(target);
-      } else {
-        showEmptyState('Nenhum ficheiro configurado');
-      }
+      const data = await resp.json();
+      filesList = Array.isArray(data) ? data : [];
     } catch (e) {
       console.error('Failed to load files:', e);
-      showBanner('Erro ao carregar ficheiros', false);
+      filesList = [];
+      showBanner('Não foi possível ler a pasta dos ficheiros.', false);
     }
+    renderFileList();
   }
 
-  function findFile(fileId) {
-    if (!fileId) return null;
-    return filesList.filter(function (f) { return f.id === fileId; })[0] || null;
-  }
+  function renderFileList() {
+    fileList.innerHTML = '';
 
-  function renderSidebar() {
-    sidebar.innerHTML = '';
-    filesList.forEach(function (file) {
+    const query = searchQuery.trim().toLowerCase();
+    const visible = query
+      ? filesList.filter(function (f) { return f.name.toLowerCase().indexOf(query) !== -1; })
+      : filesList;
+
+    if (visible.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'file-empty';
+      empty.textContent = filesList.length === 0
+        ? 'Ainda não há ficheiros Excel na pasta original.'
+        : 'Nenhum ficheiro encontrado para "' + searchInput.value.trim() + '".';
+      fileList.appendChild(empty);
+      return;
+    }
+
+    visible.forEach(function (file) {
+      const isSyncing = syncingNames.has(file.name);
+
       const row = document.createElement('div');
       row.className = 'file-row';
+
+      // entry.name may include subfolders ("Subpasta/Relatorio.xlsx"): show the
+      // folder part muted and the file name in the normal style.
+      const label = document.createElement('span');
+      label.className = 'file-label';
+      label.title = file.name;
+
+      const cut = file.name.lastIndexOf('/');
+      if (cut !== -1) {
+        const folder = document.createElement('span');
+        folder.className = 'file-folder';
+        folder.textContent = file.name.slice(0, cut + 1);
+        label.appendChild(folder);
+      }
+
+      const name = document.createElement('span');
+      name.className = 'file-name';
+      name.textContent = file.name.slice(cut + 1);
+      label.appendChild(name);
+
+      const info = STATUS_LABELS[file.status] || STATUS_LABELS.new;
+      const badge = document.createElement('span');
+      badge.className = 'file-badge ' + info.cls;
+      badge.textContent = info.text;
 
       const btn = document.createElement('button');
       btn.className = 'file-btn';
       btn.type = 'button';
-      btn.dataset.fileId = file.id;
-      btn.textContent = file.label || file.id;
-      btn.addEventListener('click', function () { selectFile(file); });
+      btn.textContent = isSyncing ? 'A copiar...' : 'Copiar para o servidor';
+      btn.disabled = isSyncing || syncingAll;
+      btn.addEventListener('click', function () { syncFile(file.name, btn); });
 
-      const remove = document.createElement('button');
-      remove.className = 'file-remove';
-      remove.type = 'button';
-      remove.textContent = '×';
-      remove.title = 'Remover da lista';
-      remove.setAttribute('aria-label', 'Remover ' + (file.label || file.id));
-      remove.addEventListener('click', function (e) {
-        e.stopPropagation();
-        removeFile(file);
-      });
-
+      row.appendChild(label);
+      row.appendChild(badge);
       row.appendChild(btn);
-      row.appendChild(remove);
-      sidebar.appendChild(row);
+      fileList.appendChild(row);
     });
   }
 
-  function showEmptyState(message) {
-    currentFileId = null;
-    fileTitle.textContent = message;
-    btnSave.disabled = true;
-    viewer.style.display = 'none';
-    viewer.removeAttribute('src');
-    placeholder.style.display = 'flex';
-    placeholder.textContent = message;
-  }
+  async function syncFile(name, rowButton) {
+    if (!name || syncingNames.has(name)) return;
 
-  function selectFile(file) {
-    currentFileId = file.id;
-    fileTitle.textContent = file.label || file.id;
-    btnSave.disabled = false;
-
-    // Update active state
-    document.querySelectorAll('.file-btn').forEach(function (btn) {
-      btn.classList.toggle('active', btn.dataset.fileId === file.id);
-    });
-
-    // Show iframe. Only assign src when it actually changed — reassigning the
-    // same URL reloads the embedded viewer and discards its state.
-    if (file.onedrive_embed_url) {
-      if (viewer.getAttribute('src') !== file.onedrive_embed_url) {
-        viewer.src = file.onedrive_embed_url;
-      }
-      viewer.style.display = 'block';
-      placeholder.style.display = 'none';
-    } else {
-      viewer.style.display = 'none';
-      placeholder.style.display = 'flex';
-      placeholder.textContent = 'URL de visualização não configurada';
-    }
-  }
-
-  async function saveFile() {
-    if (!currentFileId) return;
-
-    btnSave.disabled = true;
-    btnSave.textContent = 'A guardar...';
+    syncingNames.add(name);
+    rowButton.disabled = true;
+    rowButton.textContent = 'A copiar...';
 
     try {
-      const resp = await fetch('/api/save', {
+      const resp = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: currentFileId }),
-      });
-      const data = await resp.json();
-
-      if (resp.status === 401 && data.error === 'not_authenticated') {
-        showBanner('Conta Microsoft não ligada. Faça login primeiro.', false);
-        authBanner.classList.add('show');
-      } else if (!resp.ok) {
-        showBanner('Erro: ' + (data.error || 'Falha desconhecida'), false);
-      } else {
-        showBanner('Guardado com sucesso em: ' + data.path, true);
-      }
-    } catch (e) {
-      showBanner('Erro de ligação ao servidor', false);
-    } finally {
-      btnSave.disabled = false;
-      btnSave.textContent = 'Guardar no computador';
-    }
-  }
-
-  // ---------- Add-file modal ----------
-
-  function openModal() {
-    selectedResult = null;
-    searchInput.value = '';
-    searchResults.innerHTML = '';
-    setSearchStatus('');
-    setDetailsError('');
-    showStep('search');
-    modal.hidden = false;
-    searchInput.focus();
-  }
-
-  function closeModal() {
-    modal.hidden = true;
-    selectedResult = null;
-  }
-
-  function showStep(step) {
-    const isSearch = step === 'search';
-    stepSearch.hidden = !isSearch;
-    stepDetails.hidden = isSearch;
-  }
-
-  function setSearchStatus(message) {
-    searchStatus.textContent = message || '';
-    searchStatus.hidden = !message;
-  }
-
-  function setDetailsError(message) {
-    detailsError.textContent = message || '';
-    detailsError.hidden = !message;
-  }
-
-  async function runSearch() {
-    // Guard against a second Enter press while a search is already in flight,
-    // which could render stale results out of order.
-    if (btnSearch.disabled) return;
-
-    const term = searchInput.value.trim();
-    if (!term) {
-      setSearchStatus('Escreva parte do nome do ficheiro.');
-      return;
-    }
-
-    searchResults.innerHTML = '';
-    setSearchStatus('A procurar...');
-    btnSearch.disabled = true;
-
-    try {
-      const resp = await fetch('/api/onedrive/search?q=' + encodeURIComponent(term));
-      const data = await resp.json();
-
-      if (resp.status === 401) {
-        setSearchStatus('Conta Microsoft não ligada. Faça login primeiro.');
-        authBanner.classList.add('show');
-        showBanner('Conta Microsoft não ligada. Faça login primeiro.', false);
-        return;
-      }
-      if (!resp.ok) {
-        const message = 'Erro na procura: ' + (data.error || 'Falha desconhecida');
-        setSearchStatus(message);
-        showBanner(message, false);
-        return;
-      }
-      if (!Array.isArray(data) || data.length === 0) {
-        setSearchStatus('Nenhum ficheiro Excel encontrado com esse nome.');
-        return;
-      }
-
-      setSearchStatus(data.length + ' ficheiro(s) encontrado(s). Escolha um.');
-      renderResults(data);
-    } catch (e) {
-      setSearchStatus('Erro de ligação ao servidor.');
-      showBanner('Erro de ligação ao servidor', false);
-    } finally {
-      btnSearch.disabled = false;
-    }
-  }
-
-  function renderResults(results) {
-    searchResults.innerHTML = '';
-    results.forEach(function (item) {
-      const row = document.createElement('button');
-      row.className = 'result-row';
-      row.type = 'button';
-
-      const name = document.createElement('span');
-      name.className = 'result-name';
-      name.textContent = item.name;
-
-      const path = document.createElement('span');
-      path.className = 'result-path';
-      path.textContent = item.path || '/';
-
-      row.appendChild(name);
-      row.appendChild(path);
-      row.addEventListener('click', function () { chooseResult(item); });
-      searchResults.appendChild(row);
-    });
-  }
-
-  function chooseResult(item) {
-    selectedResult = item;
-    chosenName.textContent = item.name;
-    inputLabel.value = stripExtension(item.name);
-    inputPath.value = suggestLocalPath(item.name);
-    setDetailsError('');
-    showStep('details');
-    inputLabel.focus();
-  }
-
-  function stripExtension(name) {
-    const dot = name.lastIndexOf('.');
-    return dot > 0 ? name.substring(0, dot) : name;
-  }
-
-  function joinPath(folder, name) {
-    if (!folder) return name;
-    const sep = folder.indexOf('\\') !== -1 ? '\\' : '/';
-    const trimmed = folder.replace(/[\\/]+$/, '');
-    return trimmed + sep + name;
-  }
-
-  function suggestLocalPath(name) {
-    return joinPath(defaultFolder, name);
-  }
-
-  async function pickFolder() {
-    // The native dialog can stay open a long time; if the user meanwhile closed
-    // the modal or picked another file, this response must not overwrite it.
-    const openedFor = selectedResult;
-
-    btnPickFolder.disabled = true;
-    try {
-      const resp = await fetch('/api/pick-folder', { method: 'POST' });
-      const data = await resp.json();
-
-      if (modal.hidden || selectedResult !== openedFor) {
-        return;
-      }
-
-      if (data.error === 'unsupported') {
-        setDetailsError('Escreva o caminho da pasta no campo acima (a janela de escolha só está disponível na aplicação).');
-        inputPath.focus();
-        return;
-      }
-      if (!resp.ok || data.error) {
-        setDetailsError('Não foi possível abrir a janela de pastas: ' + (data.error || 'falha desconhecida'));
-        return;
-      }
-      if (data.cancelled || !data.path) {
-        return;
-      }
-
-      setDetailsError('');
-      inputPath.value = joinPath(data.path, selectedResult ? selectedResult.name : '');
-    } catch (e) {
-      setDetailsError('Erro de ligação ao servidor.');
-    } finally {
-      btnPickFolder.disabled = false;
-    }
-  }
-
-  async function confirmAdd() {
-    if (!selectedResult) {
-      setDetailsError('Escolha primeiro um ficheiro.');
-      showStep('search');
-      return;
-    }
-
-    const localPath = inputPath.value.trim();
-    if (!localPath) {
-      setDetailsError('Indique onde guardar o ficheiro no computador.');
-      inputPath.focus();
-      return;
-    }
-
-    setDetailsError('');
-    btnConfirm.disabled = true;
-    btnConfirm.textContent = 'A adicionar...';
-
-    try {
-      const resp = await fetch('/api/files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          onedrive_item_id: selectedResult.id,
-          name: selectedResult.name,
-          label: inputLabel.value.trim(),
-          local_path: localPath,
-        }),
+        body: JSON.stringify({ name: name }),
       });
       const data = await resp.json().catch(function () { return {}; });
 
-      if (resp.status === 401) {
-        setDetailsError('Conta Microsoft não ligada. Faça login primeiro.');
-        authBanner.classList.add('show');
-        showBanner('Conta Microsoft não ligada. Faça login primeiro.', false);
-        return;
-      }
       if (!resp.ok) {
-        const message = data.error || 'Falha desconhecida ao adicionar o ficheiro.';
-        setDetailsError(message);
-        showBanner('Erro: ' + message, false);
-        return;
+        showBanner('Erro ao copiar "' + name + '": ' + (data.error || 'falha desconhecida'), false);
+      } else {
+        showBanner('Copiado para o servidor: ' + name, true);
       }
-
-      closeModal();
-      await loadFiles(data.id);
-      showBanner('Ficheiro adicionado: ' + (data.label || data.name || data.id), true);
     } catch (e) {
-      setDetailsError('Erro de ligação ao servidor.');
       showBanner('Erro de ligação ao servidor', false);
     } finally {
-      btnConfirm.disabled = false;
-      btnConfirm.textContent = 'Confirmar';
+      syncingNames.delete(name);
+      await loadFiles();
     }
   }
 
-  async function removeFile(file) {
-    const name = file.label || file.id;
-    if (!window.confirm('Remover "' + name + '" da lista?\n\nO ficheiro no OneDrive não é apagado.')) {
+  async function syncAll() {
+    if (syncingAll) return;
+
+    syncingAll = true;
+    btnSyncAll.disabled = true;
+    const originalLabel = btnSyncAll.textContent;
+    btnSyncAll.textContent = 'A copiar...';
+    renderFileList();
+
+    try {
+      const resp = await fetch('/api/sync-all', { method: 'POST' });
+      const data = await resp.json().catch(function () { return {}; });
+
+      if (!resp.ok) {
+        showBanner('Erro ao copiar os ficheiros: ' + (data.error || 'falha desconhecida'), false);
+      } else {
+        const results = Array.isArray(data.results) ? data.results : [];
+        const ok = results.filter(function (r) { return r.ok; }).length;
+        const failed = results.length - ok;
+
+        if (results.length === 0) {
+          showBanner('Não há ficheiros para copiar.', true);
+        } else if (failed === 0) {
+          showBanner(ok + ' ficheiro(s) copiado(s) para o servidor.', true);
+        } else {
+          showBanner(ok + ' copiado(s), ' + failed + ' com erro.', false);
+        }
+      }
+    } catch (e) {
+      showBanner('Erro de ligação ao servidor', false);
+    } finally {
+      syncingAll = false;
+      btnSyncAll.disabled = false;
+      btnSyncAll.textContent = originalLabel;
+      await loadFiles();
+    }
+  }
+
+  /* ---------------- update ---------------- */
+
+  async function checkForUpdate() {
+    if (checkingUpdate) return;
+
+    checkingUpdate = true;
+    btnCheckUpdate.disabled = true;
+    const originalLabel = btnCheckUpdate.textContent;
+    btnCheckUpdate.textContent = 'A verificar...';
+
+    let restarting = false;
+    try {
+      const resp = await fetch('/api/update', { method: 'POST' });
+      const data = await resp.json().catch(function () { return {}; });
+
+      if (!resp.ok || data.error) {
+        showBanner(data.error || 'Não foi possível verificar as atualizações.', false);
+      } else if (data.updated) {
+        // The process is about to restart: leave the button disabled.
+        restarting = true;
+        showBanner('Atualização instalada. A aplicação vai reiniciar...', true);
+        btnCheckUpdate.textContent = 'A reiniciar...';
+      } else {
+        showBanner('Já tem a versão mais recente.', true);
+      }
+    } catch (e) {
+      showBanner('Erro de ligação ao servidor', false);
+    } finally {
+      if (!restarting) {
+        checkingUpdate = false;
+        btnCheckUpdate.disabled = false;
+        btnCheckUpdate.textContent = originalLabel;
+      }
+    }
+  }
+
+  /* ---------------- settings ---------------- */
+
+  async function openSettings() {
+    setSettingsError('');
+    inputOriginalDir.value = '';
+    inputServerDir.value = '';
+
+    try {
+      const resp = await fetch('/api/settings');
+      const data = await resp.json();
+      inputOriginalDir.value = data.original_dir || '';
+      inputServerDir.value = data.server_dir || '';
+    } catch (e) {
+      console.error('Failed to load settings:', e);
+      showBanner('Não foi possível ler as definições.', false);
       return;
     }
 
-    try {
-      const resp = await fetch('/api/files/' + encodeURIComponent(file.id), { method: 'DELETE' });
+    settingsModal.hidden = false;
+    inputOriginalDir.focus();
+  }
 
-      if (!resp.ok && resp.status !== 204) {
-        let message = 'Falha desconhecida';
-        try {
-          const data = await resp.json();
-          message = data.error || message;
-        } catch (e) { /* no JSON body */ }
-        showBanner('Erro ao remover: ' + message, false);
+  function closeSettings() {
+    if (savingSettings) return;
+    settingsModal.hidden = true;
+    setSettingsError('');
+  }
+
+  async function pickFolder(input) {
+    try {
+      const resp = await fetch('/api/pick-folder', { method: 'POST' });
+      const data = await resp.json().catch(function () { return {}; });
+
+      if (data.cancelled) return;
+
+      if (data.error === 'unsupported') {
+        setSettingsError('Não é possível abrir a janela de escolha de pastas. Escreva o caminho da pasta diretamente na caixa.');
+        return;
+      }
+      if (!resp.ok || data.error) {
+        setSettingsError('Erro ao escolher a pasta: ' + (data.error || 'falha desconhecida'));
+        return;
+      }
+      if (data.path) {
+        input.value = data.path;
+        setSettingsError('');
+      }
+    } catch (e) {
+      setSettingsError('Erro de ligação ao servidor');
+    }
+  }
+
+  async function saveSettings() {
+    if (savingSettings) return;
+
+    const originalDir = inputOriginalDir.value.trim();
+    const serverDir = inputServerDir.value.trim();
+
+    savingSettings = true;
+    settingsSave.disabled = true;
+    const originalLabel = settingsSave.textContent;
+    settingsSave.textContent = 'A guardar...';
+    setSettingsError('');
+
+    try {
+      const resp = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ original_dir: originalDir, server_dir: serverDir }),
+      });
+      const data = await resp.json().catch(function () { return {}; });
+
+      if (!resp.ok) {
+        setSettingsError(data.error || 'Não foi possível guardar as pastas.');
         return;
       }
 
-      if (currentFileId === file.id) {
-        currentFileId = null;
-      }
+      savingSettings = false;
+      closeSettings();
+      showBanner('Pastas atualizadas.', true);
       await loadFiles();
-      showBanner('Ficheiro removido: ' + name, true);
     } catch (e) {
-      showBanner('Erro de ligação ao servidor', false);
+      setSettingsError('Erro de ligação ao servidor');
+    } finally {
+      savingSettings = false;
+      settingsSave.disabled = false;
+      settingsSave.textContent = originalLabel;
     }
+  }
+
+  function setSettingsError(message) {
+    settingsError.textContent = message || '';
+    settingsError.hidden = !message;
   }
 
   function showBanner(message, success) {

@@ -8,62 +8,47 @@
 </head>
 <body>
   <div id="app">
-    <aside id="sidebar">
-      <h2>Ficheiros</h2>
-      <button id="btn-add-file" type="button">+ Adicionar ficheiro</button>
-      <div id="file-list"></div>
-    </aside>
     <main id="main">
-      <div id="auth-banner">
-        <span>Conta Microsoft não ligada.</span>
-        <a href="/auth/login">Ligar conta Microsoft</a>
-      </div>
       <div id="topbar">
-        <span id="file-title">Selecione um ficheiro</span>
-        <button id="btn-save" disabled>Guardar no computador</button>
+        <h1>Ficheiros</h1>
+        <div id="topbar-actions">
+          <button id="btn-check-update" type="button">Verificar atualizações</button>
+          <button id="btn-settings" type="button" title="Definições">&#9881; Definições</button>
+          <button id="btn-sync-all" type="button">Copiar tudo para o servidor</button>
+        </div>
       </div>
-      <div id="viewer-container">
-        <div id="placeholder">Selecione um ficheiro</div>
-        <iframe id="viewer" style="display:none"></iframe>
+      <div id="searchbar">
+        <input id="search-input" type="search" placeholder="Pesquisar ficheiro..." autocomplete="off">
       </div>
+      <div id="file-list"></div>
       <div id="status-banner"></div>
     </main>
   </div>
 
-  <div id="add-file-modal" class="modal-overlay" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div id="settings-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="modal-header">
-        <h3 id="modal-title">Adicionar ficheiro</h3>
-        <button id="modal-close" class="modal-close" type="button" aria-label="Fechar">&times;</button>
+        <h3 id="settings-title">Definições das pastas</h3>
+        <button id="settings-close" class="modal-close" type="button" aria-label="Fechar">&times;</button>
       </div>
-
-      <div id="step-search" class="modal-step">
-        <p class="modal-hint">Escreva parte do nome do ficheiro Excel que está no OneDrive, ou cole a ligação de partilha (link) do ficheiro.</p>
+      <label class="field">
+        <span>Pasta original (onde edita os ficheiros) — pode ser uma pasta local ou de rede, ex.: \\servidor\pasta</span>
         <div class="modal-row">
-          <input id="search-input" type="text" placeholder="Nome do ficheiro ou ligação" autocomplete="off">
-          <button id="btn-search" type="button">Procurar</button>
+          <input id="input-original-dir" type="text" autocomplete="off">
+          <button id="btn-pick-original" type="button" class="btn-secondary">Escolher pasta...</button>
         </div>
-        <p id="search-status" class="modal-status" hidden></p>
-        <div id="search-results" class="results"></div>
-      </div>
-
-      <div id="step-details" class="modal-step" hidden>
-        <p class="modal-hint">Ficheiro escolhido: <strong id="chosen-name"></strong></p>
-        <label class="field">
-          <span>Nome a mostrar na lista</span>
-          <input id="input-label" type="text" autocomplete="off">
-        </label>
-        <label class="field">
-          <span>Onde guardar no computador</span>
-          <input id="input-path" type="text" autocomplete="off">
-        </label>
-        <button id="btn-pick-folder" class="btn-secondary" type="button">Escolher pasta...</button>
-        <p id="details-error" class="modal-error" hidden></p>
-        <div class="modal-actions">
-          <button id="btn-back" class="btn-secondary" type="button">Voltar</button>
-          <button id="btn-cancel" class="btn-secondary" type="button">Cancelar</button>
-          <button id="btn-confirm" type="button">Confirmar</button>
+      </label>
+      <label class="field">
+        <span>Pasta do servidor (destino da cópia) — também pode ser de rede, ex.: \\servidor\pasta</span>
+        <div class="modal-row">
+          <input id="input-server-dir" type="text" autocomplete="off">
+          <button id="btn-pick-server" type="button" class="btn-secondary">Escolher pasta...</button>
         </div>
+      </label>
+      <p id="settings-error" class="modal-error" hidden></p>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="btn-secondary" type="button">Cancelar</button>
+        <button id="settings-save" type="button">Guardar</button>
       </div>
     </div>
   </div>

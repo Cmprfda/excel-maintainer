@@ -9,6 +9,10 @@ from maintainer import config
 
 config.DEV_MODE = os.environ.get('DEV') == '1'
 
+# Must run before anything reads config.ORIGINAL_DIR / config.SERVER_DIR.
+from maintainer import settings
+settings.load()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -23,18 +27,19 @@ logger = logging.getLogger(__name__)
 def main():
     args = sys.argv[1:]
 
-    if len(args) >= 2 and args[0] == 'download':
-        file_id = args[1]
-        from maintainer import graph
-        token = graph.get_valid_token()
-        if not token:
-            logger.error('Not authenticated. Run the server and log in first.')
-            sys.exit(1)
-        data = graph.download_file(file_id)
-        out_path = os.path.join(config.BASE_DIR, f'{file_id}.xlsx')
-        with open(out_path, 'wb') as f:
-            f.write(data)
-        logger.info(f'Downloaded {len(data)} bytes to {out_path}')
+    if len(args) >= 1 and args[0] == 'sync':
+        from maintainer import sync
+        name = args[1] if len(args) >= 2 else None
+        if name:
+            dst = sync.sync_file(name)
+            logger.info(f'Synced {name} -> {dst}')
+        else:
+            results = sync.sync_all()
+            for r in results:
+                if r['ok']:
+                    logger.info(f"Synced {r['name']} -> {r['path']}")
+                else:
+                    logger.error(f"Failed {r['name']}: {r['error']}")
     else:
         from maintainer.updater import check_and_update
         check_and_update()

@@ -1,6 +1,8 @@
 import io
+import os
 import zipfile
 import logging
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,28 @@ def repair(xlsx_bytes: bytes, link_map: list[dict]) -> bytes:
     count = len(link_map)
     logger.info(f'Hyperlink repair applied ({count} substitution rules)')
     return result
+
+
+def build_link_map(original_dir: str, server_dir: str) -> list[dict]:
+    """Build substitution pairs that rewrite absolute-path hyperlinks pointing at
+    original_dir so they point at server_dir instead, covering the path spellings
+    Excel might have stored a local-file hyperlink with (native backslash path,
+    forward-slash path, and a percent-encoded file:// URI form)."""
+    original_dir = os.path.normpath(original_dir)
+    server_dir = os.path.normpath(server_dir)
+
+    def variants(path):
+        forward = path.replace('\\', '/')
+        return [path, forward, quote(forward, safe='/:')]
+
+    link_map = []
+    seen = set()
+    for frm, to in zip(variants(original_dir), variants(server_dir)):
+        if frm == to or frm in seen:
+            continue
+        seen.add(frm)
+        link_map.append({'from': frm, 'to': to})
+    return link_map
 
 
 def _should_repair(filename: str) -> bool:

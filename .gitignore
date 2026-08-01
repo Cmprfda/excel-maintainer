@@ -1,9 +1,11 @@
 # Sensitive local state — never commit
-files.json
-graph_config.json
-graph_token.json
 maintainer.log
 *.log
+paths.json
+
+# Test Excel files
+for_testing_original/**/*.xlsx
+for_testing_server/**/*.xlsx
 
 # Python
 __pycache__/

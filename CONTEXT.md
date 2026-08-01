@@ -2,33 +2,40 @@
 
 ## 1) Project Vision
 
-Local web app (Python + HTML/CSS/JS vanilla) that wraps the **OneDrive Excel online viewer** and provides a **sync-to-local** workflow. Designed for users unfamiliar with computers: minimal steps, big buttons, no jargon.
+Local web app (Python + HTML/CSS/JS vanilla) that provides a **copy-to-server** workflow between two local folders, configurable from the app itself. Designed for users unfamiliar with computers: minimal steps, big buttons, no jargon.
 
 **Core problem it solves:**
-- Excel files live in two places: OneDrive (for editing/sharing) and a local folder (for offline use, COM-based tools, backups).
-- Hyperlinks inside the `.xlsx` files break when switching context (local paths vs. OneDrive URLs).
-- Non-technical users need a single, obvious interface to open, edit, and save without knowing where the file is.
+- Excel files are edited in one folder (the "original" folder, recursively — subfolders included) and need a synced copy in another (the "server" folder), for offline use, COM-based tools, or backups.
+- Hyperlinks inside the `.xlsx` files break when the folder path changes (original path vs. server path).
+- Non-technical users need a single, obvious button to copy the current files across, with hyperlinks fixed automatically, and a simple way to point the app at their own two folders instead of the default `for_testing_original/`/`for_testing_server/` pair.
 
 ---
 
-## 2) Core Workflows
+## 2) Core Workflow
 
-### Open & View
-1. App starts → shows a simple file list (files registered in `files.json`).
-2. User picks a file → app opens it in the embedded **OneDrive Excel Online viewer** (iframe embed URL).
-3. User edits directly in the OneDrive viewer (no local copy involved during editing).
+### Edit
+1. User opens and edits files directly in desktop Excel, inside the original folder (including subfolders). The app is not involved in editing.
 
-### Save to Local
-1. User clicks **"Guardar no computador"** (big green button).
-2. Backend downloads the current OneDrive version of the file via Microsoft Graph (`/me/drive/items/{id}/content`).
-3. Backend runs **hyperlink repair**: replaces OneDrive/SharePoint web URLs in `xl/worksheets/*.xml` with the correct local absolute paths (configured per file in `files.json`).
-4. File is written to the configured local folder path.
-5. UI shows green success or red error feedback.
+### Copy to Server
+1. App starts → shows a simple list of every `.xlsx` file found anywhere under the original folder (recursive), each tagged Synced / Outdated / New relative to the server folder, nested files shown with their folder as a muted prefix. A search box above the list filters it by file name (matching the full relative path) as the user types.
+2. User clicks **"Copiar para o servidor"** on a file (or "Copiar tudo" for all of them).
+3. Backend reads the file from the original folder, runs **hyperlink repair** (rewrites any hyperlink pointing at the original folder's absolute path so it points at the server folder instead), and writes the result into the server folder under the same relative path, creating subfolders as needed to mirror the structure.
+4. UI shows green success or red error feedback, then refreshes the file list.
+
+### Configuring the folders
+1. User clicks the **⚙ Definições** button → a modal shows the current original/server folder paths.
+2. Each has a text field plus an **"Escolher pasta..."** button (native folder picker via pywebview; falls back to manual typing in browser mode).
+3. Saving validates both paths are given and aren't equal or nested inside each other (case-insensitively), creates them if missing, persists them to `paths.json`, and applies them immediately — no restart needed.
+4. Either folder may be a local path or a network (UNC) path such as `\\SERVIDOR\Partilha\Pasta`. If the network location is unreachable (WiFi down, wrong server name, no permission), saving fails with a plain-Portuguese message naming the folder instead of a raw OS error.
+
+### Updating the app
+1. On every launch (outside DEV mode) `maintainer/updater.py` fetches the remote tags and, if HEAD is behind the latest tag, pulls and restarts the process in place.
+2. The user can also force this from the UI with the **"Verificar atualizações"** button (`POST /api/update`), which works in DEV mode too and reports "already up to date", the applied update (followed by an automatic restart), or a plain-Portuguese error.
 
 ### Hyperlink Fix Strategy
-- Each registered file has a `link_map` in `files.json`: a list of `{"from": "<onedrive_url_fragment>", "to": "<local_path>"}` pairs.
+- The substitution pairs are derived directly from the two folder paths (`hyperlinks.build_link_map`), covering backslash, forward-slash, and percent-encoded spellings — no per-file configuration needed.
 - The repair step is a zip-level string replacement (no openpyxl write — avoids corruption).
-- Local-to-OneDrive direction (if needed in future): reverse the map.
+- Scope is `xl/worksheets/*.xml` and `xl/sharedStrings.xml` — this covers `=HYPERLINK()` formulas and plain-text cell values, which is what production files actually use (confirmed with the user). Native "Insert Hyperlink" targets (stored in `xl/worksheets/_rels/*.rels`) are out of scope but not needed.
 
 ---
 
@@ -36,11 +43,9 @@ Local web app (Python + HTML/CSS/JS vanilla) that wraps the **OneDrive Excel onl
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3, stdlib only + `requests` for Graph API |
-| Auth | Microsoft Graph, authorization code + PKCE on loopback (same pattern as BSP-tracker) |
+| Backend | Python 3, stdlib only |
 | Frontend | HTML + CSS + JS vanilla (single `index.html` + `static/`) |
 | UI launch | `pywebview` (native window) with `webbrowser` fallback |
-| Excel viewer | OneDrive embed URL in an `<iframe>` |
 
 ---
 
@@ -48,62 +53,47 @@ Local web app (Python + HTML/CSS/JS vanilla) that wraps the **OneDrive Excel onl
 
 ```
 excel-maintainer/
-  app.py                  # entry point (server start, CLI dispatch)
+  app.py                  # entry point (applies settings, server start, CLI dispatch: sync)
   maintainer/             # backend package
-    config.py             # constants, mutable globals
+    config.py             # constants, mutable globals (ORIGINAL_DIR, SERVER_DIR, ...)
+    settings.py           # persist/apply the configured original+server folders (paths.json)
     server.py             # HTTP routes + Handler
-    graph.py              # Microsoft Graph auth + file download
-    hyperlinks.py         # zip-level hyperlink repair
-    files.py              # load/save files.json registry
+    sync.py               # recursively discover files, sync status, copy + repair
+    hyperlinks.py          # zip-level hyperlink repair + link-map builder
+    updater.py            # git-tag update check: auto on launch + manual (/api/update)
   static/
     css/theme.css
     css/main.css
     js/main.js
   index.html
-  files.json              # registered file registry (NOT in releases)
-  graph_config.json       # Graph app credentials (NOT in releases)
-  graph_token.json        # cached token (NOT in releases)
+  for_testing_original/   # default working folder (gitignored xlsx incl. subfolders, kept via .gitkeep)
+  for_testing_server/     # default synced-copy folder (gitignored xlsx incl. subfolders, kept via .gitkeep)
+  paths.json              # user's configured folder paths (gitignored, machine-specific)
   run-dev.bat
   run.bat
-  setup.bat
+  setup.bat              # installs pywebview and creates the desktop shortcut
+  create_shortcut.ps1    # builds the "Excel Maintainer" desktop shortcut (called by setup.bat)
+  make_release.bat
 ```
 
 ---
 
-## 5) files.json Schema
-
-```json
-[
-  {
-    "id": "unique-slug",
-    "label": "Nome legível para o utilizador",
-    "onedrive_item_id": "<Graph item id>",
-    "onedrive_embed_url": "<Office Online embed URL>",
-    "local_path": "C:\\Users\\...\\file.xlsx",
-    "link_map": [
-      { "from": "https://criticalsoftware.sharepoint.com/...", "to": "C:\\Users\\..." }
-    ]
-  }
-]
-```
-
----
-
-## 6) Key Design Rules
+## 5) Key Design Rules
 
 - **No openpyxl writes.** Hyperlink repair works at the raw zip/XML level to avoid corrupting charts and validations.
-- **OneDrive is the source of truth** for editing. The local copy is a read/offline mirror.
-- **One action per screen.** The UI shows the viewer and one prominent save button. No settings buried in menus.
+- **The original folder is the source of truth.** The server folder is only ever written by the sync action.
+- **The two folders must never be equal or nested.** Enforced on save, since that would make the recursive scan treat synced output as new input.
+- **One action per screen.** The UI shows the file list, sync buttons, and a settings modal for the two folder paths. No settings buried in menus.
 - **Feedback is always visible.** Every action ends with a green (OK) or red (error) banner. No silent failures.
-- **Auth is automatic.** Token is cached in `graph_token.json`; re-login only when expired. User never sees OAuth steps day-to-day.
+- **No accounts, no auth.** Both folders are local; there is nothing to sign in to.
 
 ---
 
-## 7) Environment
+## 6) Environment
 
 | Environment | Path | Port |
 |---|---|---|
 | DEV | `C:\Users\cm-andrade\Desktop\my_projects\excel-maintainer` | 8780 |
 | Production (future) | TBD | 8779 |
 
-Local folder for Excel files: configured per file in `files.json` (not a global setting — each file has its own `local_path`).
+`for_testing_original/` and `for_testing_server/` at the repo root are only the defaults — both folders are user-configurable from the app's settings modal (not per-file configuration; the pair is global and persisted in `paths.json`).
