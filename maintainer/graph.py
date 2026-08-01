@@ -103,6 +103,146 @@ def refresh_token(token_data: dict) -> dict:
     return new_token
 
 
+SEARCHABLE_EXTENSIONS = ('.xlsx', '.xlsm')
+
+
+def search_files(query: str) -> list[dict]:
+    """Search the user's OneDrive for Excel files matching `query`.
+
+    Returns a list of {id, name, path} dicts (path is for display only).
+    """
+    token = get_valid_token()
+    if not token:
+        raise RuntimeError('Not authenticated')
+
+    # A literal '/' or '\' breaks Graph's search query grammar; degrade a
+    # pasted path-like fragment into a plain multi-word search instead.
+    cleaned = query.replace('/', ' ').replace('\\', ' ')
+    # OData string literal: single quotes are escaped by doubling them.
+    literal = urllib.parse.quote(cleaned.replace("'", "''"), safe='')
+    url = f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{literal}')?$top=50"
+    resp = requests.get(url, headers={'Authorization': f'Bearer {token}'})
+    if not resp.ok:
+        detail = _graph_error(resp)
+        logger.error(f'OneDrive search failed for "{query}": {detail}')
+        raise RuntimeError(detail)
+
+    results = []
+    for item in resp.json().get('value', []):
+        if 'file' not in item:
+            continue
+        name = item.get('name') or ''
+        if not name.lower().endswith(SEARCHABLE_EXTENSIONS):
+            continue
+        results.append(_item_to_result(item))
+
+    logger.info(f'OneDrive search "{query}": {len(results)} Excel file(s)')
+    return results
+
+
+def _item_to_result(item: dict) -> dict:
+    """Reduce a Graph driveItem to the {id, name, path} shape the UI uses."""
+    raw_path = (item.get('parentReference') or {}).get('path') or ''
+    # '/drive/root:/Documents/Sub' -> '/Documents/Sub'
+    display_path = raw_path.split(':', 1)[1] if ':' in raw_path else raw_path
+    return {
+        'id': item.get('id'),
+        'name': item.get('name') or '',
+        'path': urllib.parse.unquote(display_path) or '/',
+    }
+
+
+def resolve_share_link(url: str) -> dict:
+    """Resolve a OneDrive/SharePoint sharing URL to its drive item.
+
+    Uses the Graph shares API, which does not depend on the search index.
+    Returns a single {id, name, path} dict.
+    """
+    token = get_valid_token()
+    if not token:
+        raise RuntimeError('Not authenticated')
+
+    # Sharing token: base64 of the URL, unpadded, URL-safe alphabet, 'u!' prefix.
+    encoded = base64.b64encode(url.encode('utf-8')).decode('ascii')
+    encoded = 'u!' + encoded.rstrip('=').replace('/', '_').replace('+', '-')
+
+    api_url = f'https://graph.microsoft.com/v1.0/shares/{encoded}/driveItem'
+    resp = requests.get(api_url, headers={'Authorization': f'Bearer {token}'})
+    if not resp.ok:
+        detail = _graph_error(resp)
+        # Improve error message for common cases
+        if 'file not found' in detail.lower() or '0x80070002' in detail:
+            detail = (
+                'A ligação fornecida não parece completa ou não aponta a um ficheiro válido. '
+                'Verifique que a ligação termina com um nome de ficheiro (ex: .xlsx) e tente novamente.'
+            )
+        elif 'accessdenied' in detail.lower():
+            detail = (
+                'Acesso negado. Verifique que tem permissão para aceder ao ficheiro '
+                'e que a ligação está correta. Se for um ficheiro partilhado, '
+                'peça que lhe seja reenviada a ligação de partilha.'
+            )
+        logger.error(f'Share link resolution failed for "{url}": {detail}')
+        raise RuntimeError(detail)
+
+    item = resp.json()
+    result = _item_to_result(item)
+    if 'file' not in item or not result['name'].lower().endswith(SEARCHABLE_EXTENSIONS):
+        raise RuntimeError('Este ficheiro não é uma folha de cálculo Excel (.xlsx/.xlsm).')
+
+    logger.info(f'Share link resolved to {result["id"]} ({result["name"]})')
+    return result
+
+
+def create_embed_link(item_id: str) -> str:
+    """Create (or fetch) an embed sharing link for a drive item.
+
+    This is a write action on sharing permissions; if the tenant has not
+    consented to it the Graph error message is raised verbatim so the user
+    or admin can act on it.
+    """
+    token = get_valid_token()
+    if not token:
+        raise RuntimeError('Not authenticated')
+
+    url = f'https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/createLink'
+    resp = requests.post(
+        url,
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+        json={'type': 'embed'},
+    )
+    if not resp.ok:
+        detail = _graph_error(resp)
+        logger.error(f'createLink failed for {item_id}: {detail}')
+        raise RuntimeError(detail)
+
+    web_url = ((resp.json().get('link') or {}).get('webUrl') or '').strip()
+    if not web_url:
+        raise RuntimeError('Graph did not return an embed webUrl for this file')
+    logger.info(f'Embed link created for {item_id}')
+    return web_url
+
+
+def _graph_error(resp) -> str:
+    """Extract the most useful error text out of a Graph error response."""
+    try:
+        err = (resp.json() or {}).get('error') or {}
+        message = (err.get('message') or '').strip()
+        code = (err.get('code') or '').strip()
+        if message and code:
+            return f'{code}: {message}'
+        if message:
+            return message
+        if code:
+            return code
+    except Exception:
+        pass
+    text = (resp.text or '').strip()
+    if text:
+        return f'HTTP {resp.status_code} — {text[:300]}'
+    return f'HTTP {resp.status_code}'
+
+
 def download_file(item_id: str) -> bytes:
     token = get_valid_token()
     if not token:
