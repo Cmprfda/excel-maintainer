@@ -1,0 +1,18 @@
+# Sensitive local state — never commit
+files.json
+graph_config.json
+graph_token.json
+maintainer.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# VS Code
+.vscode/
+
+# OS
+Thumbs.db
+desktop.ini
