@@ -20,6 +20,10 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == '/':
+            # Auth callback lands here when Microsoft redirects back with ?code=
+            if 'code' in query:
+                self._handle_auth_callback(query)
+                return
             self._serve_file(os.path.join(config.BASE_DIR, 'index.html'), 'text/html')
         elif path.startswith('/static/'):
             rel = path[len('/static/'):]
@@ -38,8 +42,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response({'authenticated': graph.is_authenticated()})
         elif path == '/auth/login':
             self._handle_auth_login()
-        elif path == '/auth/callback':
-            self._handle_auth_callback(query)
         else:
             self._error(404, 'Not Found')
 
