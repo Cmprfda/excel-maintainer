@@ -21,6 +21,7 @@ Trivial edits (one-liners, typos) skip the pipeline.
 - **Start DEV (port 8780):** `.\run-dev.bat`
 - **Validate syntax:** `python -m py_compile app.py` + `Get-ChildItem maintainer\*.py | ForEach-Object { python -m py_compile $_.FullName }`
 - **Test Graph download:** `python app.py download <file-id>` (CLI, no server)
+- **Publish release:** `.\make_release.bat v1.2.3` — commits, tags, and pushes to GitHub
 
 ---
 
