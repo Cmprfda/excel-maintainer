@@ -52,7 +52,8 @@ html, body {
 }
 
 #btn-settings,
-#btn-check-update {
+#btn-check-update,
+#btn-refresh {
   background: #fff;
   color: var(--color-text);
   border: 1px solid #bbb;
@@ -64,11 +65,13 @@ html, body {
 }
 
 #btn-settings:hover,
-#btn-check-update:hover {
+#btn-check-update:hover,
+#btn-refresh:hover {
   background: #eee;
 }
 
-#btn-check-update:disabled {
+#btn-check-update:disabled,
+#btn-refresh:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

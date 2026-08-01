@@ -7,6 +7,7 @@
   const statusBanner = document.getElementById('status-banner');
   const btnSyncAll = document.getElementById('btn-sync-all');
   const btnCheckUpdate = document.getElementById('btn-check-update');
+  const btnRefresh = document.getElementById('btn-refresh');
   const searchInput = document.getElementById('search-input');
 
   const btnSettings = document.getElementById('btn-settings');
@@ -36,11 +37,13 @@
   let syncingAll = false;
   let savingSettings = false;
   let checkingUpdate = false;
+  let refreshing = false;
   let searchQuery = '';
 
   async function init() {
     btnSyncAll.addEventListener('click', syncAll);
     btnCheckUpdate.addEventListener('click', checkForUpdate);
+    btnRefresh.addEventListener('click', refreshFiles);
     searchInput.addEventListener('input', function () {
       searchQuery = searchInput.value;
       renderFileList();
@@ -67,6 +70,7 @@
   /* ---------------- files ---------------- */
 
   async function loadFiles() {
+    let ok = true;
     try {
       const resp = await fetch('/api/files');
       const data = await resp.json();
@@ -74,9 +78,27 @@
     } catch (e) {
       console.error('Failed to load files:', e);
       filesList = [];
+      ok = false;
       showBanner('Não foi possível ler a pasta dos ficheiros.', false);
     }
     renderFileList();
+    return ok;
+  }
+
+  async function refreshFiles() {
+    if (refreshing) return;
+
+    refreshing = true;
+    btnRefresh.disabled = true;
+    const originalLabel = btnRefresh.textContent;
+    btnRefresh.textContent = 'A atualizar...';
+
+    const ok = await loadFiles();
+    if (ok) showBanner('Lista de ficheiros atualizada.', true);
+
+    refreshing = false;
+    btnRefresh.disabled = false;
+    btnRefresh.textContent = originalLabel;
   }
 
   function renderFileList() {
